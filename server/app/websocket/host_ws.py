@@ -1,11 +1,16 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 import json
 from app.services.game_service import GameService
+from app.dependencies import get_game_service
 
 game_service = GameService()
 
 
-async def host_websocket(websocket: WebSocket, game_pin: str):
+async def host_websocket(
+    websocket: WebSocket,
+    game_pin: str,
+    game_service: GameService = Depends(get_game_service),
+):
     await websocket.accept()
     try:
         game_service.connect_host(game_pin, websocket)

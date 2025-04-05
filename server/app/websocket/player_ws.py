@@ -9,7 +9,7 @@ game_service = GameService()
 async def player_websocket(websocket: WebSocket, game_pin: str):
     await websocket.accept()
     nickname = await websocket.receive_text()
-    connected = await game_service.connect_player(game_pin, webscoket, nickname)
+    connected = await game_service.connect_player(game_pin, websocket, nickname)
     if not connected:
         await websocket.close()
         return

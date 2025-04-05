@@ -5,17 +5,27 @@ from fastapi import WebSocket
 
 # from starlette.websockets import WebSocket
 from app.models.game import GameState
+from app.database.database import get_game_collection
 from app.models.player import Player
 from app.models.question import Question
 from app.services.quiz_service import QuizService
+from motor.motor_asyncio import AsyncIOMotorClient
+
+
+def get_game_service():
+    game_collection = get_game_collection()
+    return GameService(game_collection=game_collection)
 
 
 class GameService:
-    def __init__(self, quiz_service: Optional[QuizService] = None):
+    def __init__(
+        self, quiz_service: Optional[QuizService] = None, game_collection=None
+    ):
         self.active_games: Dict[str, GameState] = {}
         self.quiz_service = quiz_service or QuizService()
+        self.game_collection = game_collection
 
-    def create_game(self) -> str:
+    async def create_game(self) -> str:
         game_pin = str(uuid.uuid4())[:6].upper()
         questions = self.quiz_service._get_default_quiz()
 
@@ -30,11 +40,15 @@ class GameService:
             player_answers={},
             current_question_start_time=None,
         )
-
+        game_state_dict = self.active_games[game_pin].dict()
+        game_state_dict["game_pin"] = game_pin
+        await self.game_collection.insert_one(game_state_dict)
         return game_pin
 
     def _get_all_active_games(self) -> List[str]:
-        return [game_code for game_code in self.active_games.keys()]
+        x =  get_game_collection()
+        print("VALUES ARE",x)
+        return x
 
     def connect_host(self, game_pin: str, websocket: WebSocket):
         game_state = self.active_games.get(game_pin)
