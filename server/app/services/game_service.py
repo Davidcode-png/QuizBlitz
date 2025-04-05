@@ -9,7 +9,11 @@ from app.database.database import get_game_collection
 from app.models.player import Player
 from app.models.question import Question
 from app.services.quiz_service import QuizService
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+import logging
+
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 
 def get_game_service():
@@ -19,11 +23,16 @@ def get_game_service():
 
 class GameService:
     def __init__(
-        self, quiz_service: Optional[QuizService] = None, game_collection=None
+        self,
+        quiz_service: Optional[QuizService] = None,
+        game_collection: AsyncIOMotorCollection = None,
     ):
         self.active_games: Dict[str, GameState] = {}
         self.quiz_service = quiz_service or QuizService()
         self.game_collection = game_collection
+
+    def _get_db_projection(self):
+        return {"_id": 0}
 
     async def create_game(self) -> str:
         game_pin = str(uuid.uuid4())[:6].upper()
@@ -45,9 +54,58 @@ class GameService:
         await self.game_collection.insert_one(game_state_dict)
         return game_pin
 
+    async def get_game_data_from_db(self, game_pin: str) -> Optional[dict]:
+        if not self.game_collection:
+            logger.error("get_game_data_from_db: game collection is not set!")
+            return None
+        logger.debug(f"Fetching game from the game pin {game_pin}")
+        return await self.game_collection.find_one(
+            {"game_pin": game_pin}, projection=self._get_db_projection
+        )
+
+    async def _update_game_state_in_db(self, game_pin: str, update_data: dict):
+        if not self.game_collection:
+            logger.error("_update_game_state_in_db: game collection is not set!")
+            return None
+        logger.debug(f"Updating DB for game {game_pin}: {update_data}")
+        result = await self.game_collection.update_one(
+            {"game_pin": game_pin}, {"$set": update_data}
+        )
+        logger.debug(
+            f"DB update result for {game_pin}: Matched={result.matched_count}, Modified={result.modified_count}"
+        )
+        return result
+
+    async def _push_player_to_db(self, game_pin: str, player_data: dict):
+        if not self.game_collection:
+            logger.error("_push_player_to_db: game_collection is not set!")
+            return None
+        logger.debug(
+            f"Adding player {player_data.get('nickname')} to DB for game {game_pin}"
+        )
+        result = await self.game_collection.update_one(
+            {"game_pin": game_pin}, {"$push": {"players": player_data}}
+        )
+        logger.debug(
+            f"DB push player result for {game_pin}: Matched={result.matched_count}, Modified={result.modified_count}"
+        )
+        return result
+
+    async def _pull_player_from_db(self, game_pin: str, nickname: str):
+        if not self.game_collection:
+            logger.error("_pull_player_from_db: game_collection is not set!")
+            return None
+        logger.debug(f"Removing player {nickname} from DB for game {game_pin}")
+        result = await self.game_collection.update_one(
+            {"game_pin": game_pin}, {"$pull": {"players": {"nickname": nickname}}}
+        )
+        logger.debug(
+            f"DB pull player result for {game_pin}: Matched={result.matched_count}, Modified={result.modified_count}"
+        )
+        return result
+
     def _get_all_active_games(self) -> List[str]:
-        x =  get_game_collection()
-        print("VALUES ARE",x)
+        x = get_game_collection()
         return x
 
     def connect_host(self, game_pin: str, websocket: WebSocket):
