@@ -45,8 +45,8 @@ class GameService:
         game_pin = str(uuid.uuid4())[:6].upper()
         # Simple uniqueness check (consider retrying if collisions are likely)
         while await self.get_game_data_from_db(game_pin):
-             game_pin = str(uuid.uuid4())[:6].upper()
-            
+            game_pin = str(uuid.uuid4())[:6].upper()
+
         questions = self.quiz_service._get_default_quiz()
 
         if not questions:
@@ -66,8 +66,8 @@ class GameService:
 
         game_data_for_db = {
             "game_pin": game_pin,
-            "players": [], # Start with no players in DB
-            "questions": [q.dict() for q in questions], # Store question data
+            "players": [],  # Start with no players in DB
+            "questions": [q.dict() for q in questions],  # Store question data
             "current_question_index": 0,
             "game_status": "waiting",
             "player_answers": {},
@@ -75,7 +75,9 @@ class GameService:
         }
 
         result = await self.game_collection.insert_one(game_data_for_db)
-        logger.info(f"Game created in DB with pin {game_pin}, Inserted ID: {result.inserted_id}")
+        logger.info(
+            f"Game created in DB with pin {game_pin}, Inserted ID: {result.inserted_id}"
+        )
         return game_pin
 
     async def get_all_active_game_pins(self) -> List[str]:
@@ -165,16 +167,23 @@ class GameService:
         """
         if game_pin in self.active_connections:
             return self.active_connections[game_pin]
-        
+
         game_data = await self.get_game_data_from_db(game_pin)
         if not game_data:
-            logger.warning(f"_get_or_create_active_game_state: Game {game_pin} not found in DB")
+            logger.warning(
+                f"_get_or_create_active_game_state: Game {game_pin} not found in DB"
+            )
             return None
         # Deserialize data from DB into GameState, Pydantic handles validation
         # Note: Websockets are NOT stored in DB, so they'll be None initially.
         # Players list from DB contains dicts, convert them to Player models
-        players_from_db = [Player(**player_data, websocket=None) for player_data in game_data.get("players", [])].
-        questions_from_db = [Question(**q_data) for q_data in game_data.get("questions", [])]
+        players_from_db = [
+            Player(**player_data, websocket=None)
+            for player_data in game_data.get("players", [])
+        ]
+        questions_from_db = [
+            Question(**q_data) for q_data in game_data.get("questions", [])
+        ]
         game_state = GameState(
             host=None,
             players=players_from_db,
@@ -182,36 +191,46 @@ class GameService:
             current_question_index=game_data.get("current_question_index", 0),
             game_status=game_data.get("game_status", "waiting"),
             player_answers=game_data.get("player_answers", {}),
-            current_question_start_time=game_data.get("current_question_start_time")
+            current_question_start_time=game_data.get("current_question_start_time"),
         )
         self.active_connections[game_pin] = game_state
         logger.info(f"Loaded game {game_pin} from DB into active connections.")
         return game_state
-    
+
     def _cleanup_active_connection(self, game_pin: str):
         """Removes a game from active_connections if no host or players are connected."""
         if game_pin in self.active_connections:
             game_state = self.active_connections[game_pin]
-            has_active_players = any(p.websocket and p.websocket.client_state == 1 for p in game_state.players) # CLIENT STATE 1, means the client has connected
+            has_active_players = any(
+                p.websocket and p.websocket.client_state == 1
+                for p in game_state.players
+            )  # CLIENT STATE 1, means the client has connected
             has_active_host = game_state.host and game_state.host.client_state == 1
 
             if not has_active_host and not has_active_players:
                 del self.active_connections[game_pin]
-                logger.info(f"Removed game {game_pin} from active connections (no active host/players).")
-
+                logger.info(
+                    f"Removed game {game_pin} from active connections (no active host/players)."
+                )
 
     def _get_all_active_games(self) -> List[str]:
         x = get_game_collection()
         return x
 
     async def connect_host(self, game_pin: str, websocket: WebSocket):
-        game_state = await self._get_or_create_active_game_state(game_pin) # self.active_games.get(game_pin)
+        game_state = await self._get_or_create_active_game_state(
+            game_pin
+        )  # self.active_games.get(game_pin)
         if game_state:
             game_state.host = websocket
             logger.info(f"Host connected to game {game_pin}")
-        if game_state.host and game_state.host.client_state == 1 :
-            logger.warning(f"Host connection rejected: Host already connected for game {game_pin}")
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Host already connected")
+        if game_state.host and game_state.host.client_state == 1:
+            logger.warning(
+                f"Host connection rejected: Host already connected for game {game_pin}"
+            )
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION, reason="Host already connected"
+            )
             raise ValueError("Host already connected")
         else:
             raise ValueError(f"Game with pin {game_pin} not found.")
@@ -221,11 +240,13 @@ class GameService:
             game_state = self.active_connections[game_pin]
             game_state.host = None
             logger.info(f"Host disconnected from game {game_pin}")
-            self._cleanup_active_connection(game_pin) # Check if game can be removed from memory
+            self._cleanup_active_connection(
+                game_pin
+            )  # Check if game can be removed from memory
         else:
-            logger.warning(f"disconnect_host: Game {game_pin} not found in active connections.")
-
-
+            logger.warning(
+                f"disconnect_host: Game {game_pin} not found in active connections."
+            )
 
     async def _broadcast_to_host(self, game_pin: str, message: Dict):
         game_state: GameState = self.active_games.get(game_pin)
