@@ -1,9 +1,6 @@
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 import json
-from app.services.game_service import GameService
-from app.dependencies import get_game_service
-
-game_service = GameService()
+from app.services.game_service import GameService, get_game_service
 
 
 async def host_websocket(
@@ -13,13 +10,17 @@ async def host_websocket(
 ):
     await websocket.accept()
     try:
-        game_service.connect_host(game_pin, websocket)
+        print("YELLO")
+        await game_service.connect_host(game_pin, websocket)
         while True:
             data = await websocket.receive_text()
             payload = json.loads(data)
             action = payload.get("action")
+            print("HEY, IT PASSED HERE")
             if action == "start_quiz":
-                await game_service.start_quiz(game_pin)
+                await game_service.start_quiz(
+                    game_pin, websocket
+                )  # Added websocket parameter
             elif action == "next_question":
                 await game_service.next_question(game_pin)
     except WebSocketDisconnect:

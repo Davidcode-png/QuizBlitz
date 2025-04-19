@@ -3,11 +3,10 @@ from fastapi import WebSocketDisconnect
 import json
 from app.services.game_service import GameService
 
-game_service = GameService()
-
 
 async def player_websocket(websocket: WebSocket, game_pin: str):
     await websocket.accept()
+    game_service = GameService()
     nickname = await websocket.receive_text()
     connected = await game_service.connect_player(game_pin, websocket, nickname)
     if not connected:
@@ -23,6 +22,7 @@ async def player_websocket(websocket: WebSocket, game_pin: str):
                 if answer_index is not None:
                     await game_service.submit_answer(game_pin, websocket, answer_index)
     except WebSocketDisconnect:
+        print("HEYYY, I just disconnected here")
         await game_service.disconnect_player(game_pin, websocket)
         print(f"Player {nickname} disconnected from game {game_pin}")
     except Exception as e:

@@ -11,3 +11,54 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+
+
+:root {
+  --primary-color: #4a148c;
+  --secondary-color: #6a1b9a;
+  --accent-color: #9c27b0;
+  --correct-color: #4CAF50;
+  --incorrect-color: #f44336;
+  --background-dark: #1a1a1a;
+  --text-light: #ffffff;
+}
+
+/* Global animations */
+@keyframes slideIn {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.animate-entry {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Answer button animations */
+.answer-button.correct {
+  animation: correct-pulse 0.5s ease-in-out;
+}
+
+.answer-button.incorrect {
+  animation: incorrect-shake 0.4s ease-in-out;
+}
+
+@keyframes correct-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+@keyframes incorrect-shake {
+  0% { transform: translateX(0); }
+  25% { transform: translateX(-10px); }
+  50% { transform: translateX(10px); }
+  75% { transform: translateX(-5px); }
+  100% { transform: translateX(0); }
+}

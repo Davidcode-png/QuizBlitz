@@ -28,4 +28,7 @@ async def close_db():
 
 
 def get_game_collection():
+    if client is None:
+        logger.error("Database client is not initialized! Call connect_db() first.")
+        raise RuntimeError("Database connection not initialized")
     return client.quizblitz.games

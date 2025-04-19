@@ -1,18 +1,27 @@
 from fastapi import Depends, FastAPI, WebSocket, HTTPException, status
 from app.api import host
 from app.services.game_service import GameService, QuizService
-from app.websocket import host_ws, player_ws
 from app.database.database import connect_db, close_db, get_game_collection
 from dotenv import load_dotenv
 import logging
+from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 app = FastAPI()
-quiz_service = QuizService()
-game_service = GameService(quiz_service=quiz_service)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")
@@ -33,6 +42,9 @@ async def shutdown_event():
 quiz_service = QuizService()
 
 
+from app.websocket import host_ws, player_ws
+
+
 async def get_game_service(game_collection=Depends(get_game_collection)):
     return GameService(quiz_service=quiz_service, game_collection=game_collection)
 
@@ -47,7 +59,9 @@ async def websocket_endpoint(websocket: WebSocket, game_pin: str):
 
 @app.websocket("/ws/host/{game_pin}")
 async def host_websocket_endpoint(websocket: WebSocket, game_pin: str):
-    await host_ws.host_websocket(websocket, game_pin)
+    await host_ws.host_websocket(
+        websocket, game_pin, GameService(quiz_service=quiz_service)
+    )
 
 
 @app.get("/game/{game_pin}/status")
