@@ -3,6 +3,7 @@ import asyncio
 from typing import Dict, List, Optional, Set
 import logging
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketState
 import redis.asyncio as redis
 from redis.asyncio import Redis
 
@@ -158,10 +159,13 @@ class RedisConnectionManager:
 
     def get_host_connection(self, game_pin: str) -> Optional[WebSocket]:
         """Get the host connection for a game if it exists and is active"""
+        print("HOST CONNECTIONS", self.host_connections)
         if game_pin in self.host_connections:
             host = self.host_connections[game_pin]
+            print("HOST", host)
+            print("CONNECTION", host.client_state)
             try:
-                if host.client_state == 1:  # Check if connection is still active
+                if host.client_state == WebSocketState.CONNECTED:  # Check if connection is still active
                     return host
             except Exception:
                 # If access to client_state raises an exception, connection is likely broken
@@ -283,6 +287,7 @@ class RedisConnectionManager:
     async def broadcast_to_host(self, game_pin: str, message: dict):
         """Send a message to the host of a game"""
         host_ws = self.get_host_connection(game_pin)
+        print("HOST WS", host_ws)
         if host_ws:
             try:
                 await host_ws.send_text(json.dumps(message))
