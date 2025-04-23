@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 import uuid
 from fastapi import WebSocket, status
 import asyncio
+import time
 
 from app.models.game import GameState
 from app.database.database import get_game_collection
@@ -212,7 +213,7 @@ class GameService:
                 game_pin, nickname
             )
             players_from_db.append(Player(**player_data, websocket=websocket))
-
+        print("HEYY")
         questions_from_db = [
             Question(**q_data) for q_data in game_data.get("questions", [])
         ]
@@ -318,7 +319,6 @@ class GameService:
                     await self.start_quiz(game_pin, websocket)
                 elif message.get("action") == "next_question":
                     await self.next_question(game_pin)
-                # Add other actions as needed
 
         except Exception as e:
             logger.error(f"Error in host connection: {e}")
@@ -354,6 +354,7 @@ class GameService:
             existing_player_connection = self.connection_manager.get_player_connection(
                 game_pin, nickname
             )
+            print("EXISTING PLAYER", existing_player_connection)
             if not existing_player_connection:
                 # Register the connection in the connection manager
                 await self.connection_manager.register_player(
@@ -378,12 +379,12 @@ class GameService:
                     )
                 )
                 return True
-            else:
-                # Player exists and is connected
-                await websocket.send_text(
-                    json.dumps({"type": "error", "message": "Nickname already taken"})
-                )
-                return False
+            # else:
+            #     # Player exists and is connected
+            #     await websocket.send_text(
+            #         json.dumps({"type": "error", "message": "Nickname already taken"})
+            #     )
+            #     return False
 
         # Add new player
         player = Player(websocket=websocket, nickname=nickname, score=0)
@@ -426,10 +427,13 @@ class GameService:
                     message.get("action") == "submit_answer"
                     and "answer_index" in message
                 ):
+                    time_taken = message.get("time_taken", 0)
                     await self.submit_answer(
-                        game_pin, websocket, message["answer_index"]
+                        game_pin, websocket, message["answer_index"], time_taken
                     )
-                # Add other actions as needed
+                elif message.get("action") == "time_up":
+                    # Handle when player time runs out
+                    await self.handle_player_timeout(game_pin, websocket)
 
         except Exception as e:
             logger.error(f"Error in player connection: {e}")
@@ -542,11 +546,22 @@ class GameService:
                 game_state.current_question_index
             ]
 
-            # Send question to players
+            # Record the time this question was sent
+            question_start_time = time.time()
+            game_state.current_question_start_time = question_start_time
+
+            # Update in DB
+            await self._update_game_state_in_db(
+                game_pin, {"current_question_start_time": question_start_time}
+            )
+
+            # Send question to players - include time_limit for client-side timer
             question_data = {
                 "type": "question",
                 "question": current_question.question,
                 "options": current_question.options,
+                "time_limit": current_question.time_limit
+                or 20,  # Default to 20 seconds if not specified
             }
             await self.connection_manager.broadcast_to_players(game_pin, question_data)
 
@@ -557,10 +572,16 @@ class GameService:
                 "options": current_question.options,
                 "question_number": game_state.current_question_index + 1,
                 "total_questions": len(game_state.questions),
+                "time_limit": current_question.time_limit or 20,
+                "correct_answer": current_question.correct_answer,  # Send correct answer to host
             }
             await self.connection_manager.broadcast_to_host(
                 game_pin, host_question_data
             )
+
+            # Reset player answers for this question
+            game_state.player_answers = {}
+            await self._update_game_state_in_db(game_pin, {"player_answers": {}})
 
         elif game_state:
             await self.end_game(game_pin)
@@ -598,13 +619,66 @@ class GameService:
 
         # Send first question
         await self._send_current_question(game_pin)
+
+        # Notify all players that the game has started
+        await self.connection_manager.broadcast_to_players(
+            game_pin,
+            {"type": "game_started"},
+        )
+        return True
+
+    async def handle_player_timeout(self, game_pin: str, player_websocket: WebSocket):
+        """Handle when a player's timer expires without submitting an answer"""
+        game_state = self.active_games.get(game_pin)
+        if not game_state:
+            return False
+
+        # Find player by websocket
+        player = None
+        for p in game_state.players:
+            if p.websocket == player_websocket:
+                player = p
+                break
+
+        if not player:
+            return False
+
+        # Player didn't answer in time
+        logger.info(f"Player {player.nickname} timed out for game {game_pin}")
+
+        # Notify host that this player timed out
+        await self.connection_manager.broadcast_to_host(
+            game_pin,
+            {
+                "type": "player_timeout",
+                "nickname": player.nickname,
+                "question_index": game_state.current_question_index,
+            },
+        )
+
+        # Send feedback to player that they didn't answer in time
+        await player_websocket.send_text(
+            json.dumps(
+                {
+                    "type": "answer_reveal",
+                    "is_correct": False,
+                    "new_score": player.score,
+                    "message": "Time's up!",
+                }
+            )
+        )
+
         return True
 
     async def submit_answer(
-        self, game_pin: str, player_websocket: WebSocket, answer_index: int
+        self,
+        game_pin: str,
+        player_websocket: WebSocket,
+        answer_index: int,
+        time_taken: float = 0,
     ):
         """Submit a player's answer"""
-        game_state = self.active_games.get(game_pin)
+        game_state = await self._get_or_create_active_game_state(game_pin)
         if not game_state:
             await player_websocket.send_text(
                 json.dumps({"type": "error", "message": "Invalid game pin."})
@@ -637,49 +711,113 @@ class GameService:
             )
             return False
 
-        # Store the answer
-        if game_pin not in game_state.player_answers:
-            game_state.player_answers[game_pin] = {}
+        current_question = game_state.questions[question_index]
 
-        game_state.player_answers[game_pin][player.nickname] = answer_index
+        # Store the answer
+        if str(question_index) not in game_state.player_answers:
+            game_state.player_answers[str(question_index)] = {}
+
+        game_state.player_answers[str(question_index)][player.nickname] = answer_index
 
         # Update in DB
         await self._update_game_state_in_db(
-            game_pin, {f"player_answers.{player.nickname}": answer_index}
+            game_pin,
+            {f"player_answers.{question_index}.{player.nickname}": answer_index},
         )
 
-        # Notify player that answer was received
+        # Check if the answer is correct
+        is_correct = answer_index == current_question.correct_answer
+
+        # Calculate score based on correctness and time taken
+        score_to_add = 0
+        if is_correct:
+            # Base score for correct answer
+            base_score = 1000
+
+            # Time factor (faster answers get more points)
+            # Assuming a 20-second timer by default
+            time_limit = current_question.time_limit or 20
+            time_factor = max(0, (time_limit - time_taken) / time_limit)
+
+            # Calculate score
+            score_to_add = int(base_score * time_factor)
+
+            # Update player's score
+            player.score += score_to_add
+            await self._update_player_score_in_db(
+                game_pin, player.nickname, player.score
+            )
+
+        # Notify player about their answer result
         await player_websocket.send_text(
             json.dumps(
-                {"type": "answer_received", "message": "Your answer has been recorded."}
+                {
+                    "type": "answer_reveal",
+                    "is_correct": is_correct,
+                    "new_score": player.score,
+                    "time_taken": time_taken,
+                }
             )
         )
 
-        # Optionally notify host about the answer
+        # Get top players for leaderboard
+        top_players = sorted(
+            [{"nickname": p.nickname, "score": p.score} for p in game_state.players],
+            key=lambda x: x["score"],
+            reverse=True,
+        )[
+            :10
+        ]  # Get top 10
+
+        # Send leaderboard update to all players
+        await self.connection_manager.broadcast_to_players(
+            game_pin, {"type": "leaderboard_update", "top_players": top_players}
+        )
+
+        # Notify host about the answer
         await self.connection_manager.broadcast_to_host(
             game_pin,
             {
                 "type": "player_answered",
                 "nickname": player.nickname,
                 "question_index": question_index,
+                "answer_index": answer_index,
+                "is_correct": is_correct,
+                "score_added": score_to_add,
+                "new_score": player.score,
             },
         )
 
         return True
 
     async def next_question(self, game_pin: str):
-        game_state: GameState = self._get_or_create_active_game_state(
-            game_pin
-        )  # self.active_games.get(game_pin)
-        if game_state and game_state.game_status == "in_progress":
-            game_state.current_question_index += 1
-            if game_state.current_question_index < len(game_state.questions):
-                await self._send_current_question(game_pin)
-            else:
-                await self.end_game(game_pin)
-        elif not game_state:
+        """Move to the next question in the quiz"""
+        game_state = await self._get_or_create_active_game_state(game_pin)
+
+        if not game_state:
+            logger.error(f"Game with pin {game_pin} not found.")
             raise ValueError(f"Game with pin {game_pin} not found.")
-        else:
-            await self._broadcast_to_host(
+
+        if game_state.game_status != "in_progress":
+            await self.connection_manager.broadcast_to_host(
                 game_pin, {"type": "error", "message": "Game is not in progress."}
             )
+            return False
+
+        # Move to next question index
+        game_state.current_question_index += 1
+
+        # Update in DB
+        await self._update_game_state_in_db(
+            game_pin, {"current_question_index": game_state.current_question_index}
+        )
+
+        # Check if there are more questions
+        if game_state.current_question_index < len(game_state.questions):
+            # Send new question to all players
+            await self._send_current_question(game_pin)
+        else:
+            # End the game if no more questions
+            await self.end_game(game_pin)
+
+        return True

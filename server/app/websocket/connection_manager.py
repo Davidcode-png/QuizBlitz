@@ -159,11 +159,8 @@ class RedisConnectionManager:
 
     def get_host_connection(self, game_pin: str) -> Optional[WebSocket]:
         """Get the host connection for a game if it exists and is active"""
-        print("HOST CONNECTIONS", self.host_connections)
         if game_pin in self.host_connections:
             host = self.host_connections[game_pin]
-            print("HOST", host)
-            print("CONNECTION", host.client_state)
             try:
                 if host.client_state == WebSocketState.CONNECTED:  # Check if connection is still active
                     return host
@@ -236,10 +233,13 @@ class RedisConnectionManager:
             and nickname in self.active_connections[game_pin]
         ):
             player_ws = self.active_connections[game_pin][nickname]
+            print("PLAYER WEBSOCKET ARE", player_ws)
             try:
-                if player_ws.client_state == 1:  # Check if connection is still active
+                if player_ws.client_state == WebSocketState.CONNECTED:  # Check if connection is still active
+                    print("WEBSOCKET RETURNED", player_ws)
                     return player_ws
             except Exception:
+                print("NOT RETURNED")
                 # If access to client_state raises an exception, connection is likely broken
                 pass
 
@@ -257,7 +257,7 @@ class RedisConnectionManager:
 
             for nickname, ws in self.active_connections[game_pin].items():
                 try:
-                    if ws.client_state == 1:  # Check if connection is still active
+                    if ws.client_state == WebSocketState.CONNECTED:  # Check if connection is still active
                         active_players[nickname] = ws
                     else:
                         to_remove.append(nickname)
@@ -314,6 +314,7 @@ class RedisConnectionManager:
     ):
         """Send a message to all players in a game, with optional exclusions"""
         players = self.get_player_connections(game_pin)
+        print("Players are", players)
         to_remove = []
 
         for nickname, websocket in players.items():

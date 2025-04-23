@@ -6,3 +6,5 @@ class Question(BaseModel):
     question: str
     options: List[str]
     answer: int #Index of the correct answer
+    time_limit: int
+    correct_answer: int

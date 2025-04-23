@@ -18,4 +18,5 @@ class QuizService:
 
     def _get_default_quiz(self) -> List[Question]:
         quiz_data = self.quizzes.get("default", [])
+        print("QUIZ DATA", quiz_data)
         return [Question(**q) for q in quiz_data]

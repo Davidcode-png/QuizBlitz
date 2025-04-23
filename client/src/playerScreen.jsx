@@ -18,6 +18,11 @@ function PlayerScreen() {
   const [gameStarted, setGameStarted] = useState(false);
   const [scoreAnimation, setScoreAnimation] = useState(false);
   const [prevScore, setPrevScore] = useState(0);
+  const [timerFinished, setTimerFinished] = useState(false);
+  const [topPlayers, setTopPlayers] = useState([]);
+  const [gameOver, setGameOver] = useState(false);
+  const [finalResults, setFinalResults] = useState([]);
+  const [questionStartTime, setQuestionStartTime] = useState(null);
 
   const colors = ["#ff5252", "#4caf50", "#2196f3", "#ff9800"];
   const iconNames = ["🔴", "🟢", "🔵", "🟠"];
@@ -73,6 +78,8 @@ function PlayerScreen() {
         setSelectedAnswer(null);
         setWaitingForNext(false);
         setGameStarted(true);
+        setTimerFinished(false);
+        setQuestionStartTime(Date.now());
 
         // Start the countdown timer (assuming 20 seconds per question)
         if (data.time_limit) {
@@ -90,15 +97,17 @@ function PlayerScreen() {
           setScoreAnimation(true);
           setTimeout(() => setScoreAnimation(false), 1500);
         }
+      } else if (data.type === "leaderboard_update") {
+        // Update top players list
+        setTopPlayers(data.top_players);
       } else if (data.type === "game_over") {
         // Handle game over state
         setQuestion(null);
         setOptions([]);
         setFeedback("");
         setWaitingForNext(false);
-
-        // Show final results
-        // You could navigate to a results screen or show a modal
+        setGameOver(true);
+        setFinalResults(data.results);
       } else if (data.type === "error") {
         alert(data.message);
       }
@@ -106,9 +115,16 @@ function PlayerScreen() {
   };
 
   const submitAnswer = (answerIndex) => {
-    if (websocket && !feedback && !selectedAnswer) {
+    if (websocket && !feedback && !selectedAnswer && !timerFinished) {
+      // Calculate time taken to answer (in seconds)
+      const timeTaken = (Date.now() - questionStartTime) / 1000;
+
       websocket.send(
-        JSON.stringify({ action: "submit_answer", answer: answerIndex })
+        JSON.stringify({
+          action: "submit_answer",
+          answer_index: answerIndex,
+          time_taken: timeTaken,
+        })
       );
       setSelectedAnswer(answerIndex);
     }
@@ -121,6 +137,11 @@ function PlayerScreen() {
         setCountdown((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
+            setTimerFinished(true);
+            // When timer finishes, show score and automatically "submit" timeout
+            if (!selectedAnswer && websocket) {
+              websocket.send(JSON.stringify({ action: "time_up" }));
+            }
             return 0;
           }
           return prev - 1;
@@ -148,6 +169,88 @@ function PlayerScreen() {
 
   // Calculate the progress percentage for timer
   const timerProgress = countdown ? (countdown / 20) * 100 : 0;
+
+  // Render top players leaderboard
+  const renderTopPlayers = () => (
+    <div className="top-players">
+      <h3>Top Players</h3>
+      <div className="leaderboard">
+        {topPlayers.slice(0, 3).map((player, index) => (
+          <div
+            key={player.nickname}
+            className={`leaderboard-item ${
+              player.nickname === nickname ? "current-player" : ""
+            }`}
+          >
+            <div className="rank">{index + 1}</div>
+            <div className="player-name">{player.nickname}</div>
+            <div className="player-score">{player.score}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // Render game over screen with final results
+  const renderGameOver = () => (
+    <motion.div
+      className="game-over-screen"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.8 }}
+    >
+      <h2>Game Over!</h2>
+      <div className="final-results">
+        <h3>Final Results</h3>
+
+        {finalResults.slice(0, 3).map((player, index) => (
+          <motion.div
+            key={player.nickname}
+            className={`podium-item rank-${index + 1} ${
+              player.nickname === nickname ? "current-player" : ""
+            }`}
+            initial={{ y: 50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: index * 0.3, duration: 0.5 }}
+          >
+            <div className="trophy">
+              {index === 0 ? "🏆" : index === 1 ? "🥈" : "🥉"}
+            </div>
+            <div className="rank">{index + 1}</div>
+            <div className="player-name">{player.nickname}</div>
+            <div className="player-score">{player.score}</div>
+          </motion.div>
+        ))}
+
+        {/* Show current player if not in top 3 */}
+        {!finalResults.slice(0, 3).some((p) => p.nickname === nickname) && (
+          <div className="your-position">
+            <p>Your Position</p>
+            {finalResults.findIndex((p) => p.nickname === nickname) > -1 && (
+              <div className="current-player-result">
+                <div className="rank">
+                  #{finalResults.findIndex((p) => p.nickname === nickname) + 1}
+                </div>
+                <div className="player-name">{nickname}</div>
+                <div className="player-score">
+                  {finalResults.find((p) => p.nickname === nickname)?.score}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <motion.button
+          className="play-again-btn"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => navigate("/")}
+        >
+          Play Again
+        </motion.button>
+      </div>
+    </motion.div>
+  );
 
   return (
     <motion.div
@@ -195,6 +298,10 @@ function PlayerScreen() {
           <div className="nickname" style={{ fontWeight: "600" }}>
             {nickname}
           </div>
+          <div className="score-container">
+            <span className="score-label">Score:</span>
+            <AnimatedScore />
+          </div>
           <div className="game-pin-small">Game: {gamePin}</div>
         </div>
       </div>
@@ -218,102 +325,135 @@ function PlayerScreen() {
         </motion.div>
       )}
 
-      <AnimatePresence>
-        {!gameStarted && (
-          <motion.div
-            className="waiting-screen"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <h2>Waiting for the game to start</h2>
-            <p>
-              Game PIN: <strong>{gamePin}</strong>
-            </p>
-            <p>
-              You're in as: <strong>{nickname}</strong>
-            </p>
-            <div className="spinner"></div>
-            <p>Wait for the host to start the game...</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {question && (
-          <motion.div
-            className="question-container"
-            key={question}
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            transition={{ duration: 0.5 }}
-          >
-            {countdown !== null && (
-              <div className="timer-container">
-                <div
-                  className="timer-circle"
-                  style={{
-                    background: `conic-gradient(var(--primary) ${timerProgress}%, #e0e0e0 0)`,
-                  }}
-                ></div>
-                <div className="timer-text">{countdown}</div>
-              </div>
+      {gameOver ? (
+        renderGameOver()
+      ) : (
+        <>
+          <AnimatePresence>
+            {!gameStarted && (
+              <motion.div
+                className="waiting-screen"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <h2>Waiting for the game to start</h2>
+                <p>
+                  Game PIN: <strong>{gamePin}</strong>
+                </p>
+                <p>
+                  You're in as: <strong>{nickname}</strong>
+                </p>
+                <div className="spinner"></div>
+                <p>Wait for the host to start the game...</p>
+              </motion.div>
             )}
+          </AnimatePresence>
 
-            <h2 className="question-text">{question}</h2>
+          <AnimatePresence>
+            {question && (
+              <motion.div
+                className="question-container"
+                key={question}
+                initial={{ opacity: 0, y: 50 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -50 }}
+                transition={{ duration: 0.5 }}
+              >
+                {countdown !== null && (
+                  <div className="timer-container">
+                    <div
+                      className="timer-circle"
+                      style={{
+                        background: `conic-gradient(var(--primary) ${timerProgress}%, #e0e0e0 0)`,
+                      }}
+                    ></div>
+                    <div className="timer-text">{countdown}</div>
+                  </div>
+                )}
 
-            <div className="options-grid">
-              {options.map((option, index) => (
-                <motion.button
-                  key={index}
-                  className={`option-btn option-${index} ${
-                    selectedAnswer === index ? "selected" : ""
-                  }`}
-                  style={{
-                    backgroundColor: colors[index],
-                    opacity:
-                      selectedAnswer !== null && selectedAnswer !== index
-                        ? 0.7
-                        : 1,
-                    transform:
-                      selectedAnswer === index ? "scale(1.05)" : "scale(1)",
-                  }}
-                  whileHover={{ scale: selectedAnswer === null ? 1.05 : 1 }}
-                  whileTap={{ scale: selectedAnswer === null ? 0.95 : 1 }}
-                  onClick={() => submitAnswer(index)}
-                  disabled={selectedAnswer !== null || feedback !== ""}
-                >
-                  <span style={{ fontSize: "1.5rem", marginRight: "8px" }}>
-                    {iconNames[index]}
-                  </span>
-                  {option}
-                </motion.button>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                <h2 className="question-text">{question}</h2>
 
-      <AnimatePresence>
-        {feedback && (
-          <motion.div
-            className={`feedback-${
-              feedback === "Correct!" ? "correct" : "incorrect"
-            }`}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
-          >
-            {feedback}
-            <div className="score-info">
-              <AnimatedScore />
-            </div>
-            {waitingForNext && <p>Waiting for the next question...</p>}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                <div className="options-grid">
+                  {options.map((option, index) => (
+                    <motion.button
+                      key={index}
+                      className={`option-btn option-${index} ${
+                        selectedAnswer === index ? "selected" : ""
+                      }`}
+                      style={{
+                        backgroundColor: colors[index],
+                        opacity:
+                          selectedAnswer !== null && selectedAnswer !== index
+                            ? 0.7
+                            : 1,
+                        transform:
+                          selectedAnswer === index ? "scale(1.05)" : "scale(1)",
+                      }}
+                      whileHover={{
+                        scale:
+                          selectedAnswer === null && !timerFinished ? 1.05 : 1,
+                      }}
+                      whileTap={{
+                        scale:
+                          selectedAnswer === null && !timerFinished ? 0.95 : 1,
+                      }}
+                      onClick={() => submitAnswer(index)}
+                      disabled={
+                        selectedAnswer !== null ||
+                        feedback !== "" ||
+                        timerFinished
+                      }
+                    >
+                      <span style={{ fontSize: "1.5rem", marginRight: "8px" }}>
+                        {iconNames[index]}
+                      </span>
+                      {option}
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {(feedback || timerFinished) && (
+              <motion.div
+                className={`feedback-container ${
+                  feedback === "Correct!"
+                    ? "correct"
+                    : feedback === "Incorrect"
+                    ? "incorrect"
+                    : "time-up"
+                }`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                {feedback ? (
+                  <div className="feedback-text">{feedback}</div>
+                ) : (
+                  <div className="feedback-text">Time's Up!</div>
+                )}
+
+                <div className="score-info">
+                  <div className="current-score">
+                    Your Score: <AnimatedScore />
+                  </div>
+                </div>
+
+                {/* Show top 3 players when waiting for next */}
+                {(waitingForNext || timerFinished) &&
+                  topPlayers.length > 0 &&
+                  renderTopPlayers()}
+
+                {waitingForNext && <p>Waiting for the next question...</p>}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </>
+      )}
     </motion.div>
   );
 }
