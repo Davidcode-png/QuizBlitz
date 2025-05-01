@@ -1,4 +1,3 @@
-```markdown
 # QuizBlitz ⚡
 
 A real-time multiplayer quiz platform built with React, FastAPI, and WebSockets
@@ -65,8 +64,6 @@ cd client
 npm start
 ```
 
-## 🎮 How It Works
-
 ### Host Experience
 1. Create new game from Host Dashboard
 2. Share 6-digit game PIN with players
@@ -94,4 +91,3 @@ npm start
 4. Demo quiz data in `server/app/services/default_quiz.json`
 
 Access at: http://localhost:3000
-```
