@@ -686,6 +686,7 @@ class GameService:
             return False
 
         if game_state.game_status != "in_progress":
+            print("THIS IS THE GAME PROGRRESS", game_state.game_status)
             await player_websocket.send_text(
                 json.dumps({"type": "error", "message": "Game is not in progress."})
             )
@@ -799,6 +800,7 @@ class GameService:
             raise ValueError(f"Game with pin {game_pin} not found.")
 
         if game_state.game_status != "in_progress":
+            print("THIS IS THE GAME PROGRRESS", game_state.game_status)
             await self.connection_manager.broadcast_to_host(
                 game_pin, {"type": "error", "message": "Game is not in progress."}
             )
