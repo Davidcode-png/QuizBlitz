@@ -89,5 +89,3 @@ npm start
 2. Default API runs on port 8000, client on 3000
 3. Requires active MongoDB and Redis instances
 4. Demo quiz data in `server/app/services/default_quiz.json`
-
-Access at: http://localhost:3000
