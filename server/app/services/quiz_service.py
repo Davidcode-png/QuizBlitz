@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import Any, List, Optional, Dict
 from app.models.question import Question
 
 
@@ -20,3 +20,16 @@ class QuizService:
         quiz_data = self.quizzes.get("default", [])
         print("QUIZ DATA", quiz_data)
         return [Question(**q) for q in quiz_data]
+
+    def get_quiz_from_external(
+        self, external: Optional[Dict[str, Any]] = None
+    ) -> List[Question]:
+        if external is None:
+            return self._get_default_quiz()
+        if isinstance(external, str):
+            try:
+                external = json.loads(external)
+            except Exception as e:
+                print(f"Error loading external quiz JSON: {e}")
+                return []
+        return external

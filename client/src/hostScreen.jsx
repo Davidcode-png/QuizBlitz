@@ -13,6 +13,13 @@ function HostScreen() {
   const [gameStatus, setGameStatus] = useState("waiting");
   const wsRef = useRef(null);
 
+  // AI Modal states
+  const [showAIModal, setShowAIModal] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedQuestions, setGeneratedQuestions] = useState([]);
+  const [editingQuestion, setEditingQuestion] = useState(null);
+
   useEffect(() => {
     if (!gamePin) return;
 
@@ -143,6 +150,111 @@ function HostScreen() {
     }
   };
 
+  // AI Question Generation Functions
+  const generateQuestions = async () => {
+    if (!aiPrompt.trim()) {
+      alert("Please enter a topic or description for the questions");
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const response = await fetch("http://localhost:8000/api/host/generate", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: aiPrompt,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.questions && data.questions.success && data.questions.data) {
+          setGeneratedQuestions(data.questions.data);
+        } else {
+          alert("Failed to generate questions. Please try again.");
+        }
+      } else {
+        console.error("Failed to generate questions");
+        alert("Failed to generate questions. Please try again.");
+      }
+    } catch (error) {
+      console.error("Error generating questions:", error);
+      alert(
+        "Error generating questions. Please check your connection and try again."
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const editQuestion = (index) => {
+    setEditingQuestion({
+      index,
+      ...generatedQuestions[index],
+    });
+  };
+
+  const saveEditedQuestion = () => {
+    if (editingQuestion) {
+      const updatedQuestions = [...generatedQuestions];
+      updatedQuestions[editingQuestion.index] = {
+        question: editingQuestion.question,
+        options: editingQuestion.options,
+        answer: editingQuestion.answer,
+        time_limit: editingQuestion.time_limit,
+        correct_answer: editingQuestion.correct_answer,
+      };
+      setGeneratedQuestions(updatedQuestions);
+      setEditingQuestion(null);
+    }
+  };
+
+  const deleteQuestion = (index) => {
+    const updatedQuestions = generatedQuestions.filter((_, i) => i !== index);
+    setGeneratedQuestions(updatedQuestions);
+  };
+
+  const useGeneratedQuestions = async () => {
+    if (generatedQuestions.length === 0) {
+      alert("No questions to use");
+      return;
+    }
+
+    try {
+      const response = await fetch("http://localhost:8000/api/host/new-game", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(generatedQuestions),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        closeAIModal();
+        navigate(`/host/${data.game_pin}`);
+      } else {
+        console.error("Failed to create game with questions");
+        alert("Failed to create game with questions. Please try again.");
+      }
+    } catch (error) {
+      console.error("Error creating game with questions:", error);
+      alert("Error creating game. Please check your connection and try again.");
+    }
+  };
+
+  const closeAIModal = () => {
+    setShowAIModal(false);
+    setAiPrompt("");
+    setGeneratedQuestions([]);
+    setEditingQuestion(null);
+  };
+
   // Helper for connection status visual indicator
   const getConnectionStatusColor = () => {
     switch (connectionStatus) {
@@ -162,11 +274,20 @@ function HostScreen() {
     <div className="host-screen-container">
       <header className="host-header">
         <h1>Quiz Host Dashboard</h1>
-        <div
-          className="connection-indicator"
-          style={{ backgroundColor: getConnectionStatusColor() }}
-        >
-          {connectionStatus}
+        <div className="header-controls">
+          <button
+            className="ai-button"
+            onClick={() => setShowAIModal(true)}
+            title="Generate AI Questions"
+          >
+            🤖
+          </button>
+          <div
+            className="connection-indicator"
+            style={{ backgroundColor: getConnectionStatusColor() }}
+          >
+            {connectionStatus}
+          </div>
         </div>
       </header>
 
@@ -244,6 +365,217 @@ function HostScreen() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* AI Modal */}
+      {showAIModal && (
+        <div
+          className="modal-overlay"
+          onClick={(e) =>
+            e.target.className === "modal-overlay" && closeAIModal()
+          }
+        >
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>🤖 AI Question Generator</h2>
+              <button className="close-button" onClick={closeAIModal}>
+                ×
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {generatedQuestions.length === 0 ? (
+                <div className="prompt-section">
+                  <label htmlFor="ai-prompt">
+                    Describe the topic or type of questions you want:
+                  </label>
+                  <textarea
+                    id="ai-prompt"
+                    className="ai-prompt-input"
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="e.g., questions trivia on Messi and Ronaldo"
+                    rows={4}
+                    disabled={isGenerating}
+                  />
+                  <button
+                    className="generate-button"
+                    onClick={generateQuestions}
+                    disabled={isGenerating || !aiPrompt.trim()}
+                  >
+                    {isGenerating ? "Generating..." : "Generate Questions"}
+                  </button>
+                </div>
+              ) : (
+                <div className="questions-section">
+                  <div className="questions-header">
+                    <h3>Generated Questions ({generatedQuestions.length})</h3>
+                    <button
+                      className="new-generation-button"
+                      onClick={() => {
+                        setGeneratedQuestions([]);
+                        setAiPrompt("");
+                      }}
+                    >
+                      Generate New Set
+                    </button>
+                  </div>
+
+                  <div className="questions-list">
+                    {generatedQuestions.map((q, index) => (
+                      <div key={index} className="question-card">
+                        <div className="question-card-header">
+                          <span className="question-number">Q{index + 1}</span>
+                          <div className="question-actions">
+                            <button
+                              className="edit-button"
+                              onClick={() => editQuestion(index)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="delete-button"
+                              onClick={() => deleteQuestion(index)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="question-content">
+                          <p className="question-text">{q.question}</p>
+                          <div className="question-meta">
+                            <span>Time: {q.time_limit}s</span>
+                            <span>Correct: Option {q.correct_answer + 1}</span>
+                          </div>
+                          <div className="options-list">
+                            {q.options.map((option, optIndex) => (
+                              <div
+                                key={optIndex}
+                                className={`option ${
+                                  optIndex === q.correct_answer ? "correct" : ""
+                                }`}
+                              >
+                                {optIndex + 1}. {option}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              {generatedQuestions.length > 0 && (
+                <button className="use-questions-button" onClick={useGeneratedQuestions}>
+                  Use These Questions
+                </button>
+              )}
+              <button className="cancel-button" onClick={closeAIModal}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Question Modal */}
+      {editingQuestion && (
+        <div className="modal-overlay">
+          <div className="modal-content edit-modal">
+            <div className="modal-header">
+              <h2>Edit Question</h2>
+              <button
+                className="close-button"
+                onClick={() => setEditingQuestion(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="edit-form">
+                <div className="form-group">
+                  <label>Question:</label>
+                  <textarea
+                    value={editingQuestion.question}
+                    onChange={(e) =>
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        question: e.target.value,
+                      })
+                    }
+                    rows={3}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Time Limit (seconds):</label>
+                  <input
+                    type="number"
+                    value={editingQuestion.time_limit}
+                    onChange={(e) =>
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        time_limit: parseInt(e.target.value),
+                      })
+                    }
+                    min={10}
+                    max={120}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Options:</label>
+                  {editingQuestion.options.map((option, index) => (
+                    <div key={index} className="option-input-group">
+                      <input
+                        type="text"
+                        value={option}
+                        onChange={(e) => {
+                          const newOptions = [...editingQuestion.options];
+                          newOptions[index] = e.target.value;
+                          setEditingQuestion({
+                            ...editingQuestion,
+                            options: newOptions,
+                          });
+                        }}
+                        placeholder={`Option ${index + 1}`}
+                      />
+                      <input
+                        type="radio"
+                        name="correct_answer"
+                        checked={editingQuestion.correct_answer === index}
+                        onChange={() =>
+                          setEditingQuestion({
+                            ...editingQuestion,
+                            correct_answer: index,
+                          })
+                        }
+                        title="Mark as correct answer"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button className="save-button" onClick={saveEditedQuestion}>
+                Save Changes
+              </button>
+              <button
+                className="cancel-button"
+                onClick={() => setEditingQuestion(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

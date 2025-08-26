@@ -12,6 +12,7 @@ function PlayerScreen() {
   const [score, setScore] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [timer, setTimer] = useState(null);
+  const [initialTimerDuration, setInitialTimerDuration] = useState(0);
   const [countdown, setCountdown] = useState(null);
   const [waitingForNext, setWaitingForNext] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
@@ -23,7 +24,7 @@ function PlayerScreen() {
   const [gameOver, setGameOver] = useState(false);
   const [finalResults, setFinalResults] = useState([]);
   const [questionStartTime, setQuestionStartTime] = useState(null);
-
+  const timerRef = useRef(null);
   const colors = ["#ff5252", "#4caf50", "#2196f3", "#ff9800"];
   const iconNames = ["🔴", "🟢", "🔵", "🟠"];
   const wsRef = useRef(null);
@@ -131,30 +132,33 @@ function PlayerScreen() {
   };
 
   const startCountdown = (seconds) => {
-    setCountdown(seconds);
-    setTimer(
-      setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            setTimerFinished(true);
-            // When timer finishes, show score and automatically "submit" timeout
-            if (!selectedAnswer && websocket) {
-              websocket.send(JSON.stringify({ action: "time_up" }));
-            }
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000)
-    );
-  };
+  if (timerRef.current) {
+    clearInterval(timerRef.current);
+  }
 
-  useEffect(() => {
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [timer]);
+  setCountdown(seconds);
+  setInitialTimerDuration(seconds);
+  timerRef.current = setInterval(() => {
+    setCountdown((prev) => {
+      if (prev <= 1) {
+        clearInterval(timerRef.current);
+        setTimerFinished(true);
+        console.log("TIMER FINISHED");
+        if (wsRef.current) {
+          wsRef.current.send(JSON.stringify({ action: "time_up" }));
+        }
+        return 0;
+      }
+      return prev - 1;
+    });
+  }, 1000);
+};
+
+  // useEffect(() => {
+  //   return () => {
+  //     if (timer) clearInterval(timer);
+  //   };
+  // }, [timer]);
 
   const AnimatedScore = () => (
     <motion.div
@@ -168,7 +172,7 @@ function PlayerScreen() {
   );
 
   // Calculate the progress percentage for timer
-  const timerProgress = countdown ? (countdown / 20) * 100 : 0;
+  const timerProgress = countdown ? (countdown / initialTimerDuration) * 100 : 0;
 
   // Render top players leaderboard
   const renderTopPlayers = () => (
@@ -193,64 +197,102 @@ function PlayerScreen() {
 
   // Render game over screen with final results
   const renderGameOver = () => (
+  <motion.div
+    className="game-over-screen"
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.6, ease: "easeOut" }}
+  >
+    {/* Clean title */}
     <motion.div
-      className="game-over-screen"
+      className="game-over-title"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      transition={{ duration: 0.8 }}
+      transition={{ delay: 0.1, duration: 0.5 }}
     >
-      <h2>Game Over!</h2>
-      <div className="final-results">
-        <h3>Final Results</h3>
+      <h1>Game Over</h1>
+    </motion.div>
 
+    <motion.div
+      className="final-results"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 0.3, duration: 0.5 }}
+    >
+      <h2 className="results-title">Final Results</h2>
+
+      {/* Clean podium */}
+      <div className="podium-container">
         {finalResults.slice(0, 3).map((player, index) => (
           <motion.div
             key={player.nickname}
             className={`podium-item rank-${index + 1} ${
               player.nickname === nickname ? "current-player" : ""
             }`}
-            initial={{ y: 50, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: index * 0.3, duration: 0.5 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ 
+              delay: 0.5 + (index * 0.1), 
+              duration: 0.4
+            }}
+            whileHover={{ 
+              y: -2,
+              transition: { duration: 0.2 }
+            }}
           >
+            <div className="rank-number">{index + 1}</div>
             <div className="trophy">
               {index === 0 ? "🏆" : index === 1 ? "🥈" : "🥉"}
             </div>
-            <div className="rank">{index + 1}</div>
-            <div className="player-name">{player.nickname}</div>
-            <div className="player-score">{player.score}</div>
+            <div className="player-info">
+              <div className="player-name">{player.nickname}</div>
+              <div className="player-score">
+                {player.score.toLocaleString()} points
+              </div>
+            </div>
           </motion.div>
         ))}
-
-        {/* Show current player if not in top 3 */}
-        {!finalResults.slice(0, 3).some((p) => p.nickname === nickname) && (
-          <div className="your-position">
-            <p>Your Position</p>
-            {finalResults.findIndex((p) => p.nickname === nickname) > -1 && (
-              <div className="current-player-result">
-                <div className="rank">
-                  #{finalResults.findIndex((p) => p.nickname === nickname) + 1}
-                </div>
-                <div className="player-name">{nickname}</div>
-                <div className="player-score">
-                  {finalResults.find((p) => p.nickname === nickname)?.score}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <motion.button
-          className="play-again-btn"
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={() => navigate("/")}
-        >
-          Play Again
-        </motion.button>
       </div>
+
+      {/* Clean current player position
+      {!finalResults.slice(0, 3).some((p) => p.nickname === nickname) && (
+        <motion.div
+          className="your-position"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8, duration: 0.4 }}
+        >
+          <p className="position-label">Your Position</p>
+          
+          {finalResults.findIndex((p) => p.nickname === nickname) > -1 && (
+            <div className="current-player-result">
+              <span className="rank">
+                #{finalResults.findIndex((p) => p.nickname === nickname) + 1}
+              </span>
+              <span className="player-name">{nickname}</span>
+              <span className="player-score">
+                {finalResults.find((p) => p.nickname === nickname)?.score?.toLocaleString()} points
+              </span>
+            </div>
+          )}
+        </motion.div>
+      )} */}
+
+      {/* Simple button */}
+      <motion.button
+        className="play-again-btn"
+        onClick={() => navigate("/")}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1, duration: 0.4 }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98  }}
+      >
+        Play Again
+      </motion.button>
     </motion.div>
-  );
+  </motion.div>
+);
 
   return (
     <motion.div

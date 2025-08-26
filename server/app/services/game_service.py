@@ -16,6 +16,8 @@ from app.websocket.connection_manager import (
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 import logging
 
+from app.services.prompt_service import get_questions_response
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,10 @@ class GameService:
     def _get_db_projection(self):
         return {"_id": 0}
 
-    async def create_game(self) -> str:
+    def generate_questions(self, message: str) -> dict:
+        return get_questions_response(message)
+
+    async def create_game(self, manual=False, questions_data=None) -> str:
         if not self.quiz_service:
             logger.error("Cannot create game, QuizService is not available.")
             raise ValueError("QuizService not initialized")
@@ -51,8 +56,11 @@ class GameService:
         # Simple uniqueness check (consider retrying if collisions are likely)
         while await self.get_game_data_from_db(game_pin):
             game_pin = str(uuid.uuid4())[:6].upper()
-
+        logger.info(f"Creating new game with pin {game_pin}")
         questions = self.quiz_service._get_default_quiz()
+        if manual:
+            questions = self.quiz_service.get_quiz_from_external(questions_data)
+            print("QUESTIONS ARE", questions)
 
         if not questions:
             logger.error(f"No questions found for game {game_pin}")
@@ -90,9 +98,12 @@ class GameService:
             logger.error("get_game_data_from_db: game collection is not set!")
             return None
         logger.debug(f"Fetching game from the game pin {game_pin}")
-        return await self.game_collection.find_one(
+        print(f"Fetching game from the game pin {game_pin}")
+        x = await self.game_collection.find_one(
             {"game_pin": game_pin}, projection=self._get_db_projection()
         )
+        print("FOUND GAME DATA", x)
+        return x
 
     async def _update_game_state_in_db(
         self, game_pin: str, update_data: dict, array_filters=None
@@ -105,6 +116,7 @@ class GameService:
             return None
 
         logger.debug(f"Updating DB for game {game_pin}: {update_data}")
+        print(f"Updating DB for game {game_pin}: {update_data}")
 
         update_operation = {"$set": update_data}
 
@@ -180,10 +192,11 @@ class GameService:
         """
         Gets the GameState from active_games or loads from DB if needed.
         Returns None if game doesn't exist in DB.
-        Now incorporates the connection manager for websockets.
         """
         if game_pin in self.active_games:
             game_state = self.active_games[game_pin]
+            game_state.game_status = "in_progress"
+            print("OR IS IT HERE", game_state)
 
             # Update the host connection from the connection manager
             host_websocket = self.connection_manager.get_host_connection(game_pin)
@@ -217,7 +230,7 @@ class GameService:
         questions_from_db = [
             Question(**q_data) for q_data in game_data.get("questions", [])
         ]
-
+        print("GAME DATA IS", game_data)
         # Get host websocket from connection manager
         host_websocket = self.connection_manager.get_host_connection(game_pin)
 
@@ -379,12 +392,6 @@ class GameService:
                     )
                 )
                 return True
-            # else:
-            #     # Player exists and is connected
-            #     await websocket.send_text(
-            #         json.dumps({"type": "error", "message": "Nickname already taken"})
-            #     )
-            #     return False
 
         # Add new player
         player = Player(websocket=websocket, nickname=nickname, score=0)
@@ -514,16 +521,16 @@ class GameService:
 
     async def end_game(self, game_pin: str):
         """End a game and notify all participants"""
-        game_state = self.active_games.get(game_pin)
+        # game_state = await self._get_or_create_active_game_state(game_pin)
+        game_state = await self.get_game_data_from_db(game_pin)
         if game_state:
-            game_state.game_status = "finished"
             await self._update_game_state_in_db(game_pin, {"game_status": "finished"})
-
+            # game_state = await self._get_or_create_active_game_state(game_pin)
             players_data = [
-                {"nickname": p.nickname, "score": p.score} for p in game_state.players
+                {"nickname": p.get('nickname'), "score": p.get('score')} for p in game_state.get('players', [])
             ]
             final_results = sorted(players_data, key=lambda x: x["score"], reverse=True)
-
+            print("FINAL RESULTS ARE", final_results)
             # Use connection manager to notify everyone
             await self.connection_manager.broadcast_to_all(
                 game_pin, {"type": "game_over", "results": final_results}
@@ -616,7 +623,7 @@ class GameService:
         await self._update_game_state_in_db(
             game_pin, {"game_status": "in_progress", "current_question_index": 0}
         )
-
+        self.active_games[game_pin] = game_state
         # Send first question
         await self._send_current_question(game_pin)
 
@@ -632,6 +639,10 @@ class GameService:
         game_state = self.active_games.get(game_pin)
         if not game_state:
             return False
+
+        current_question: Question = game_state.questions[
+            game_state.current_question_index
+        ]
 
         # Find player by websocket
         player = None
@@ -656,12 +667,23 @@ class GameService:
             },
         )
 
+        is_correct = (
+            game_state.player_answers[str(game_state.current_question_index)][
+                player.nickname
+            ]
+            == current_question.correct_answer
+            if str(game_state.current_question_index) in game_state.player_answers
+            and player.nickname
+            in game_state.player_answers[str(game_state.current_question_index)]
+            else False
+        )
+        print("USER IS CORRECT", is_correct)
         # Send feedback to player that they didn't answer in time
         await player_websocket.send_text(
             json.dumps(
                 {
                     "type": "answer_reveal",
-                    "is_correct": False,
+                    "is_correct": is_correct,
                     "new_score": player.score,
                     "message": "Time's up!",
                 }
@@ -749,17 +771,17 @@ class GameService:
                 game_pin, player.nickname, player.score
             )
 
-        # Notify player about their answer result
-        await player_websocket.send_text(
-            json.dumps(
-                {
-                    "type": "answer_reveal",
-                    "is_correct": is_correct,
-                    "new_score": player.score,
-                    "time_taken": time_taken,
-                }
-            )
-        )
+        # # Notify player about their answer result
+        # await player_websocket.send_text(
+        #     json.dumps(
+        #         {
+        #             "type": "answer_reveal",
+        #             "is_correct": is_correct,
+        #             "new_score": player.score,
+        #             "time_taken": time_taken,
+        #         }
+        #     )
+        # )
 
         # Get top players for leaderboard
         top_players = sorted(
